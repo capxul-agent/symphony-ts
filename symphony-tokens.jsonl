@@ -1,0 +1,2 @@
+{"timestamp":"2026-05-10T11:01:09.230Z","issueId":"issue-1","runId":"run-1","usage":{"input_tokens":100,"output_tokens":50,"total_tokens":150}}
+{"timestamp":"2026-05-10T11:05:06.142Z","issueId":"issue-1","runId":"run-1","usage":{"input_tokens":100,"output_tokens":50,"total_tokens":150}}
