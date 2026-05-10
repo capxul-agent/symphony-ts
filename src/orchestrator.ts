@@ -3,6 +3,9 @@ import { mkdirSync, existsSync, rmSync, appendFileSync, readFileSync } from "fs"
 import { join, resolve } from "path";
 import { GraphQLClient, gql } from "graphql-request";
 import { z } from "zod";
+import * as http from "http";
+import { Effect } from "effect";
+import { PrLifecycleManager } from "./pr_lifecycle.js";
 
 // ─── Domain Types ───────────────────────────────────────────────────────────
 
@@ -26,7 +29,7 @@ export interface WorkflowConfig {
   readonly states: { readonly active: string[]; readonly terminal: string[] };
   readonly codex: { readonly command: string; readonly readTimeoutMs: number; readonly turnTimeoutMs: number; readonly stallTimeoutMs: number };
   readonly workspace: { readonly root: string };
-  readonly hooks?: { readonly preRun?: string; readonly postRun?: string };
+  readonly hooks?: { readonly after_create?: string; readonly before_run?: string; readonly after_run?: string; readonly before_remove?: string };
 }
 
 export interface Workflow {
@@ -73,7 +76,7 @@ export function makeConfig(overrides?: Partial<AppConfig>): AppConfig {
   return {
     linearApiKey: process.env.LINEAR_API_KEY || "",
     linearProjectSlug: process.env.LINEAR_PROJECT_SLUG || "symphony",
-    workspaceRoot: process.env.WORKSPACE_ROOT || "/opt/symphony-ts/workspaces",
+    workspaceRoot: process.env.WORKSPACE_ROOT || "/home/abuusama/symphony-ts/workspaces",
     codexCommand: process.env.CODEX_COMMAND || "python3 /opt/symphony/kimi_cli_bridge.py",
     pollIntervalMs: Number(process.env.POLL_INTERVAL_MS) || 30000,
     maxConcurrentWorkers: Number(process.env.MAX_CONCURRENT_WORKERS) || 3,
@@ -311,19 +314,20 @@ export function createHooks(config: HookConfig): Hooks {
         return { exitCode: 0, stdout: "", stderr: "" };
       }
 
-      const proc = Bun.spawn({
-        cmd: ["/bin/sh", "-lc", command],
+      const { spawn } = require("child_process");
+      const proc = spawn("/bin/sh", ["-lc", command], {
         cwd: workspacePath,
         env: { ...process.env, ...env },
-        stdout: "pipe",
-        stderr: "pipe",
       });
 
-      await proc.exited;
+      let stdout = "";
+      let stderr = "";
+      proc.stdout?.on("data", (data: Buffer) => { stdout += data.toString(); });
+      proc.stderr?.on("data", (data: Buffer) => { stderr += data.toString(); });
 
-      const stdout = await new Response(proc.stdout).text();
-      const stderr = await new Response(proc.stderr).text();
-      const exitCode = proc.exitCode ?? -1;
+      const exitCode = await new Promise<number>((resolve) => {
+        proc.on("close", (code: number | null) => resolve(code ?? -1));
+      });
 
       return { exitCode, stdout, stderr };
     },
@@ -619,54 +623,55 @@ export function createLinearGraphqlTool(
 
 // ─── Workflow Loader ──────────────────────────────────────────────────────
 
+import * as YAML from "yaml";
+
 export async function loadWorkflow(path: string): Promise<Workflow> {
-  // Simple YAML-like parsing for WORKFLOW.md
   const content = readFileSync(path, "utf-8");
   
-  // Extract config section between ```yaml and ```
-  const yamlMatch = content.match(/```yaml\n([\s\S]*?)```/);
-  const yamlContent = yamlMatch ? yamlMatch[1] : content;
+  // Split on the second --- to separate YAML frontmatter from prompt template
+  const parts = content.split(/^---\s*$/m);
   
-  // Extract prompt template after the yaml block
-  const promptMatch = content.match(/```yaml\n[\s\S]*?```\n\n([\s\S]*)/);
-  const promptTemplate = promptMatch ? promptMatch[1].trim() : "Work on issue {{issue.identifier}}: {{issue.title}}";
-
-  // Parse YAML-like content
-  const lines = yamlContent.split("\n");
-  let trackerKind = "linear";
-  let projectSlug = "";
-  const activeStates: string[] = [];
-  const terminalStates: string[] = [];
-  let codexCommand = "python3 /opt/symphony/kimi_cli_bridge.py";
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("tracker:")) {
-      const parts = trimmed.split(":");
-      if (parts.length >= 3) {
-        trackerKind = parts[1].trim();
-        projectSlug = parts[2].trim();
-      }
-    } else if (trimmed.startsWith("states:")) {
-      // Parse states list
-      const statesStr = trimmed.substring(7).trim();
-      const states = statesStr.split(",").map(s => s.trim()).filter(Boolean);
-      // Assume first n-2 are active, last 2 are terminal (Done, Canceled)
-      if (states.length >= 2) {
-        activeStates.push(...states.slice(0, -2));
-        terminalStates.push(...states.slice(-2));
-      }
-    } else if (trimmed.startsWith("codex.command:")) {
-      codexCommand = trimmed.substring(14).trim();
-    }
+  let yamlContent: string;
+  let promptTemplate: string;
+  
+  if (parts.length >= 3) {
+    // Standard frontmatter: ---\nyaml\n---\nprompt
+    yamlContent = parts[1].trim();
+    promptTemplate = parts.slice(2).join("---").trim();
+  } else {
+    // Fallback: try to extract from ```yaml blocks
+    const yamlMatch = content.match(/```yaml\n([\s\S]*?)```/);
+    yamlContent = yamlMatch ? yamlMatch[1].trim() : "";
+    const promptMatch = content.match(/```yaml\n[\s\S]*?```\n\n([\s\S]*)/);
+    promptTemplate = promptMatch ? promptMatch[1].trim() : "Work on issue {{issue.identifier}}: {{issue.title}}";
   }
+
+  // Parse YAML with proper parser
+  const parsed = YAML.parse(yamlContent) as {
+    tracker?: { kind?: string; project_slug?: string };
+    states?: { active?: string[]; terminal?: string[] };
+    codex?: { command?: string; read_timeout_ms?: number; turn_timeout_ms?: number; stall_timeout_ms?: number };
+    workspace?: { root?: string };
+    hooks?: Record<string, string>;
+  };
+
+  const trackerKind = parsed.tracker?.kind || "linear";
+  const projectSlug = parsed.tracker?.project_slug || "";
+  const activeStates = parsed.states?.active || ["Todo", "In Progress", "In Review"];
+  const terminalStates = parsed.states?.terminal || ["Done", "Canceled"];
+  const codexCommand = parsed.codex?.command || "python3 /opt/symphony/kimi_cli_bridge.py";
+  const readTimeoutMs = parsed.codex?.read_timeout_ms || 5000;
+  const turnTimeoutMs = parsed.codex?.turn_timeout_ms || 300000;
+  const stallTimeoutMs = parsed.codex?.stall_timeout_ms || 60000;
+  const workspaceRoot = parsed.workspace?.root || "/opt/symphony-ts/workspaces";
 
   return {
     config: {
       tracker: { kind: "linear" as const, projectSlug },
-      states: { active: activeStates.length > 0 ? activeStates : ["Todo", "In Progress", "In Review"], terminal: terminalStates.length > 0 ? terminalStates : ["Done", "Canceled"] },
-      codex: { command: codexCommand, readTimeoutMs: 30000, turnTimeoutMs: 300000, stallTimeoutMs: 60000 },
-      workspace: { root: "/opt/symphony-ts/workspaces" },
+      states: { active: activeStates, terminal: terminalStates },
+      codex: { command: codexCommand, readTimeoutMs, turnTimeoutMs, stallTimeoutMs },
+      workspace: { root: workspaceRoot },
+      hooks: parsed.hooks,
     },
     promptTemplate,
   };
@@ -719,13 +724,7 @@ export interface Server {
   isRunning(): boolean;
 }
 
-export function createServer(
-  config: { port: number; host: string },
-  getSnapshot: () => OrchestratorSnapshot
-): Server {
-  let server: ReturnType<typeof Bun.serve> | null = null;
-
-  const htmlDashboard = `<!DOCTYPE html>
+const htmlDashboard = `<!DOCTYPE html>
 <html>
 <head>
   <title>Symphony Dashboard</title>
@@ -820,52 +819,52 @@ export function createServer(
 </body>
 </html>`;
 
+export function createServer(
+  config: { port: number; host: string },
+  getSnapshot: () => OrchestratorSnapshot
+): Server {
+  let server: http.Server | null = null;
+
   return {
     start: () => {
-      server = Bun.serve({
-        port: config.port,
-        hostname: config.host,
-        routes: {
-          "/": new Response(htmlDashboard, {
-            headers: { "Content-Type": "text/html" },
-          }),
-          "/api/v1/state": {
-            GET: () => {
-              const snapshot = getSnapshot();
-              return Response.json(snapshot);
-            },
-          },
-          "/api/v1/issues/:id": {
-            GET: (req) => {
-              const id = req.params.id;
-              const snapshot = getSnapshot();
-              const issue = snapshot.running.find((r) => r.issueId === id || r.identifier === id);
-              if (!issue) {
-                return new Response(JSON.stringify({ error: "Not found" }), {
-                  status: 404,
-                  headers: { "Content-Type": "application/json" },
-                });
-              }
-              return Response.json(issue);
-            },
-          },
-          "/api/v1/refresh": {
-            POST: () => {
-              return Response.json({ queued: true, operations: ["poll", "reconcile"] });
-            },
-          },
-        },
-        fetch(req) {
-          return new Response("Not Found", { status: 404 });
-        },
+      server = http.createServer((req, res) => {
+        const url = req.url || "/";
+        
+        if (url === "/" || url === "/dashboard") {
+          res.writeHead(200, { "Content-Type": "text/html" });
+          res.end(htmlDashboard);
+        } else if (url === "/api/v1/state") {
+          const snapshot = getSnapshot();
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(snapshot));
+        } else if (url.startsWith("/api/v1/issues/")) {
+          const id = url.split("/").pop();
+          const snapshot = getSnapshot();
+          const issue = snapshot.running.find((r) => r.issueId === id || r.identifier === id);
+          if (!issue) {
+            res.writeHead(404, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Not found" }));
+          } else {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(issue));
+          }
+        } else if (url === "/api/v1/refresh") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ queued: true, operations: ["poll", "reconcile"] }));
+        } else {
+          res.writeHead(404);
+          res.end("Not Found");
+        }
       });
 
-      console.log(`Symphony server running on http://${config.host}:${config.port}`);
+      server.listen(config.port, config.host, () => {
+        console.log(`Symphony server running on http://${config.host}:${config.port}`);
+      });
     },
 
     stop: () => {
       if (server) {
-        server.stop();
+        server.close();
         server = null;
         console.log("Symphony server stopped");
       }
@@ -891,6 +890,7 @@ export class Orchestrator {
   private server: Server;
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastPollTime: string | null = null;
+  private prLifecycle: PrLifecycleManager;
 
   constructor(
     private config: AppConfig,
@@ -904,13 +904,22 @@ export class Orchestrator {
     this.tokenAccountant = createTokenAccountant();
     this.promptBuilder = createPromptBuilder();
     this.reconciler = createReconciler(["done", "canceled"], ["todo", "in progress", "in review"]);
-    this.hooks = createHooks(hookConfig || {});
+    this.hooks = createHooks(hookConfig || { timeout_ms: 300_000 });
     this.linearTool = createLinearGraphqlTool((query, variables) =>
       this.tracker.rawQuery(query, variables)
     );
     this.server = createServer(
       { port: config.dashboardPort, host: "0.0.0.0" },
       () => this.buildSnapshot()
+    );
+    this.prLifecycle = new PrLifecycleManager(
+      {
+        reviewer: process.env.GITHUB_REVIEWER || "aaronabuusama",
+        pollIntervalMs: config.pollIntervalMs,
+        maxPollDurationMs: 24 * 60 * 60 * 1000, // 24 hours
+      },
+      process.env.GH_TOKEN,
+      config.linearApiKey
     );
   }
 
@@ -935,8 +944,8 @@ export class Orchestrator {
     // Start HTTP server
     this.server.start();
 
-    // Do initial tick
-    await this.tick(workflow);
+    // Do initial tick (non-blocking)
+    this.tick(workflow).catch((e) => console.error("[symphony] Initial tick error:", e));
 
     // Schedule recurring ticks
     this.timer = setInterval(() => {
@@ -990,16 +999,25 @@ export class Orchestrator {
         await this.stopWorker(issueId, workflow);
       }
 
-      // Cleanup workspaces
+      // Cleanup workspaces (only if PR lifecycle is terminal or not tracking)
       for (const issueId of reconciliation.toCleanup) {
+        // Skip cleanup if PR lifecycle is still active
+        if (this.prLifecycle && !this.prLifecycle.isTerminal(issueId)) {
+          console.log(`[symphony] Delaying cleanup for ${issueId} — PR lifecycle still active`);
+          continue;
+        }
         const worker = this.state.get(issueId);
         if (worker) {
           const workspacePath = `${this.config.workspaceRoot}/${worker.issueId}`;
           await runHook(this.hooks, "before_remove", workspacePath);
           try { this.workspaces.cleanup(worker.issueId); } catch {}
         }
+        this.prLifecycle?.remove(issueId);
         this.state.delete(issueId);
       }
+
+      // 2.5. Poll PR lifecycle for completed workers
+      await this.prLifecycle.pollAll();
 
       // 3. Process retry queue
       const retryEntry = this.retryQueue.next();
@@ -1079,6 +1097,11 @@ export class Orchestrator {
           if (worker) {
             this.state.set(issue.id, { ...worker, status: "completed" });
           }
+
+          // Start PR lifecycle tracking
+          const branchName = `symphony/${issue.identifier}`;
+          this.prLifecycle.startTracking(issue.id, issue.identifier, branchName);
+          console.log(`[symphony] Started PR lifecycle tracking for ${issue.identifier} (branch: ${branchName})`);
 
           // Run after_run hook
           await runHook(this.hooks, "after_run", workspace, {

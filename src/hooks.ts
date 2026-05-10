@@ -34,22 +34,22 @@ export function createHooks(config: HookConfig): Hooks {
           return { exitCode: 0, stdout: "", stderr: "" };
         }
 
-        const proc = Bun.spawn({
-          cmd: ["/bin/sh", "-lc", command],
-          cwd: workspacePath,
-          env: { ...process.env, ...env },
-          stdout: "pipe",
-          stderr: "pipe",
-        });
+      const { spawn } = require("child_process");
+      const proc = spawn("/bin/sh", ["-lc", command], {
+        cwd: workspacePath,
+        env: { ...process.env, ...env },
+      });
 
-        // Wait for process to complete
-        await proc.exited;
+      let stdout = "";
+      let stderr = "";
+      proc.stdout?.on("data", (data: Buffer) => { stdout += data.toString(); });
+      proc.stderr?.on("data", (data: Buffer) => { stderr += data.toString(); });
 
-        const stdout = await new Response(proc.stdout).text();
-        const stderr = await new Response(proc.stderr).text();
-        const exitCode = proc.exitCode ?? -1;
+      const exitCode = await new Promise<number>((resolve) => {
+        proc.on("close", (code: number | null) => resolve(code ?? -1));
+      });
 
-        return { exitCode, stdout, stderr };
+      return { exitCode, stdout, stderr };
       }),
   };
 }

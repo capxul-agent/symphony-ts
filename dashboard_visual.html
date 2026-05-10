@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Symphony Dashboard - Visual Reference</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            margin: 0;
+            padding: 2rem;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #fff;
+            margin-bottom: 0.5rem;
+        }
+        .subtitle {
+            color: #888;
+            margin-bottom: 2rem;
+        }
+        .metric-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 1rem;
+            margin: 2rem 0;
+        }
+        .metric-card {
+            background: #1a1a1a;
+            padding: 1.5rem;
+            border-radius: 8px;
+            border: 1px solid #333;
+            transition: border-color 0.2s;
+        }
+        .metric-card:hover {
+            border-color: #444;
+        }
+        .metric-label {
+            color: #888;
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+        }
+        .metric-value {
+            font-size: 2.5rem;
+            font-weight: 600;
+            color: #fff;
+            margin: 0.5rem 0;
+        }
+        .metric-detail {
+            color: #666;
+            font-size: 0.875rem;
+        }
+        .section {
+            background: #1a1a1a;
+            padding: 1.5rem;
+            border-radius: 8px;
+            border: 1px solid #333;
+            margin: 1.5rem 0;
+        }
+        .section-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: #fff;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.875rem;
+        }
+        th, td {
+            text-align: left;
+            padding: 0.75rem;
+            border-bottom: 1px solid #333;
+        }
+        th {
+            color: #888;
+            font-weight: 500;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 0.05em;
+        }
+        tr:hover {
+            background: #222;
+        }
+        .status-running {
+            color: #22c55e;
+        }
+        .status-retrying {
+            color: #f59e0b;
+        }
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        .badge-green {
+            background: rgba(34, 197, 94, 0.15);
+            color: #22c55e;
+        }
+        .badge-amber {
+            background: rgba(245, 158, 11, 0.15);
+            color: #f59e0b;
+        }
+        .empty-state {
+            color: #666;
+            font-style: italic;
+            padding: 2rem;
+            text-align: center;
+        }
+        .refresh-indicator {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            color: #888;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .live-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: #22c55e;
+            border-radius: 50%;
+            margin-right: 0.5rem;
+            animation: pulse 2s infinite;
+        }
+    </style>
+</head>
+<body>
+    <div class="refresh-indicator">
+        <span class="live-dot"></span>Auto-refresh every 5s
+    </div>
+
+    <div class="container">
+        <h1>🔮 Symphony Operations Dashboard</h1>
+        <p class="subtitle">Current state, retry pressure, token usage, and orchestration health.</p>
+        
+        <div class="metric-grid">
+            <div class="metric-card">
+                <div class="metric-label">Running</div>
+                <div class="metric-value">1</div>
+                <div class="metric-detail">Active issue sessions</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Retrying</div>
+                <div class="metric-value">1</div>
+                <div class="metric-detail">Issues waiting for retry</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Total Tokens</div>
+                <div class="metric-value">4,700</div>
+                <div class="metric-detail">In 1,500 / Out 3,200</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Runtime</div>
+                <div class="metric-value">45s</div>
+                <div class="metric-detail">Total Codex runtime</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Running Sessions</div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Issue</th>
+                        <th>State</th>
+                        <th>Session</th>
+                        <th>Runtime</th>
+                        <th>Tokens</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>CAP-34</td>
+                        <td><span class="badge badge-green">Todo</span></td>
+                        <td><code>sess-123</code></td>
+                        <td>45s</td>
+                        <td>4,700</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Retry Queue</div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Issue</th>
+                        <th>Attempt</th>
+                        <th>Due In</th>
+                        <th>Error</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>CAP-33</td>
+                        <td><span class="badge badge-amber">2</span></td>
+                        <td>45s</td>
+                        <td class="status-retrying">Agent timeout</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section" style="margin-top: 3rem; border-color: #444;">
+            <div class="section-title">📋 What This Dashboard Shows</div>
+            <ul style="color: #aaa; line-height: 2;">
+                <li><strong style="color: #fff;">Running</strong> — Active agent sessions currently processing issues</li>
+                <li><strong style="color: #fff;">Retrying</strong> — Issues that failed and are waiting to be retried with exponential backoff</li>
+                <li><strong style="color: #fff;">Total Tokens</strong> — Cumulative LLM token usage (input + output) across all sessions</li>
+                <li><strong style="color: #fff;">Runtime</strong> — Total time agents have been running</li>
+                <li><strong style="color: #fff;">Auto-refresh</strong> — Dashboard polls /api/v1/state every 5 seconds</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>

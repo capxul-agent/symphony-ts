@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Symphony Dashboard</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; background: #0a0a0a; color: #e0e0e0; }
+    h1 { color: #fff; }
+    .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin: 2rem 0; }
+    .metric-card { background: #1a1a1a; padding: 1.5rem; border-radius: 8px; border: 1px solid #333; }
+    .metric-label { color: #888; font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .metric-value { font-size: 2rem; font-weight: 600; color: #fff; margin: 0.5rem 0; }
+    .metric-detail { color: #666; font-size: 0.875rem; }
+    .section { background: #1a1a1a; padding: 1.5rem; border-radius: 8px; border: 1px solid #333; margin: 1rem 0; }
+    .section-title { font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 0.75rem; border-bottom: 1px solid #333; }
+    th { color: #888; font-weight: 500; }
+    .status-badge { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 999px; font-size: 0.75rem; }
+    .status-running { background: #22c55e20; color: #22c55e; }
+    .status-retrying { background: #f59e0b20; color: #f59e0b; }
+    .empty-state { color: #666; font-style: italic; padding: 2rem; text-align: center; }
+  </style>
+</head>
+<body>
+  <h1>🔮 Symphony Operations Dashboard</h1>
+  <p>Current state, retry pressure, token usage, and orchestration health.</p>
+  
+  <div class="metric-grid">
+    <div class="metric-card">
+      <div class="metric-label">Running</div>
+      <div class="metric-value">1</div>
+      <div class="metric-detail">Active issue sessions</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Retrying</div>
+      <div class="metric-value">1</div>
+      <div class="metric-detail">Issues waiting for retry</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Total Tokens</div>
+      <div class="metric-value">4,700</div>
+      <div class="metric-detail">In 1,500 / Out 3,200</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Runtime</div>
+      <div class="metric-value">45s</div>
+      <div class="metric-detail">Total Codex runtime</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Running Sessions</div>
+    <table>
+      <tr><th>Issue</th><th>State</th><th>Session</th><th>Runtime</th><th>Tokens</th></tr>
+      <tr><td>CAP-34</td><td>Todo</td><td>sess-123</td><td>45s</td><td>4,700</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Retry Queue</div>
+    <table>
+      <tr><th>Issue</th><th>Attempt</th><th>Due In</th><th>Error</th></tr>
+      <tr><td>CAP-33</td><td>2</td><td>45s</td><td>Agent timeout</td></tr>
+    </table>
+  </div>
+</body>
+</html>

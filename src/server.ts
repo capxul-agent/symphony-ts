@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { z } from "zod";
+import * as http from "http";
 
 // ─── Domain ───
 
@@ -63,7 +64,7 @@ export function createServer(
   config: ServerConfig,
   getSnapshot: () => OrchestratorSnapshot
 ): Server {
-  let server: ReturnType<typeof Bun.serve> | null = null;
+  let server: http.Server | null = null;
 
   const htmlDashboard = `<!DOCTYPE html>
 <html>
@@ -163,52 +164,45 @@ export function createServer(
   return {
     start: () =>
       Effect.sync(() => {
-        server = Bun.serve({
-          port: config.port,
-          hostname: config.host,
-          routes: {
-            "/": new Response(htmlDashboard, {
-              headers: { "Content-Type": "text/html" },
-            }),
-            "/api/v1/state": {
-              GET: () => {
-                const snapshot = getSnapshot();
-                return Response.json(snapshot);
-              },
-            },
-            "/api/v1/issues/:id": {
-              GET: (req) => {
-                const id = req.params.id;
-                const snapshot = getSnapshot();
-                const issue = snapshot.running.find((r) => r.issueId === id || r.identifier === id);
-                if (!issue) {
-                  return new Response(JSON.stringify({ error: "Not found" }), {
-                    status: 404,
-                    headers: { "Content-Type": "application/json" },
-                  });
-                }
-                return Response.json(issue);
-              },
-            },
-            "/api/v1/refresh": {
-              POST: () => {
-                // Trigger immediate poll — caller provides this
-                return Response.json({ queued: true, operations: ["poll", "reconcile"] });
-              },
-            },
-          },
-          fetch(req) {
-            return new Response("Not Found", { status: 404 });
-          },
+        server = http.createServer((req, res) => {
+          const url = new URL(req.url || "/", `http://${req.headers.host}`);
+          
+          if (url.pathname === "/") {
+            res.writeHead(200, { "Content-Type": "text/html" });
+            res.end(htmlDashboard);
+          } else if (url.pathname === "/api/v1/state") {
+            const snapshot = getSnapshot();
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(snapshot));
+          } else if (url.pathname.startsWith("/api/v1/issues/")) {
+            const id = url.pathname.split("/").pop();
+            const snapshot = getSnapshot();
+            const issue = snapshot.running.find((r) => r.issueId === id || r.identifier === id);
+            if (!issue) {
+              res.writeHead(404, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "Not found" }));
+            } else {
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify(issue));
+            }
+          } else if (url.pathname === "/api/v1/refresh" && req.method === "POST") {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ queued: true, operations: ["poll", "reconcile"] }));
+          } else {
+            res.writeHead(404, { "Content-Type": "text/plain" });
+            res.end("Not Found");
+          }
         });
 
-        console.log(`Symphony server running on http://${config.host}:${config.port}`);
+        server.listen(config.port, config.host, () => {
+          console.log(`Symphony server running on http://${config.host}:${config.port}`);
+        });
       }),
 
     stop: () =>
       Effect.sync(() => {
         if (server) {
-          server.stop();
+          server.close();
           server = null;
           console.log("Symphony server stopped");
         }

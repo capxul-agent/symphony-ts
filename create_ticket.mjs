@@ -12,17 +12,40 @@ async function createIssue() {
   // Get project ID
   const projectQuery = gql`
     query($slug: String!) {
-      project(slugId: $slug) {
-        id
-        name
+      projects(filter: { slugId: { eq: $slug } }) {
+        nodes {
+          id
+          name
+        }
       }
     }
   `;
   
-  const project = await client.request(projectQuery, { slug: PROJECT_SLUG }) as any;
-  console.log("Project:", project.project.name);
+  const projectResult = await client.request(projectQuery, { slug: PROJECT_SLUG });
+  const project = projectResult.projects.nodes[0];
+  console.log("Project:", project.name);
   
-  // Get first workflow state (Todo)
+  // Get team ID (required for Linear)
+  const teamsQuery = gql`
+    query {
+      teams(first: 10) {
+        nodes {
+          id
+          name
+        }
+      }
+    }
+  `;
+  
+  const teams = await client.request(teamsQuery);
+  const team = teams.teams.nodes[0];
+  
+  if (!team) {
+    console.error("No teams found");
+    return;
+  }
+  
+  console.log("Team:", team.name);
   const statesQuery = gql`
     query {
       workflowStates(first: 10) {
@@ -34,12 +57,12 @@ async function createIssue() {
     }
   `;
   
-  const states = await client.request(statesQuery) as any;
-  const todoState = states.workflowStates.nodes.find((s: any) => s.name === "Todo");
+  const states = await client.request(statesQuery);
+  const todoState = states.workflowStates.nodes.find((s) => s.name === "Todo");
   
   if (!todoState) {
     console.error("Todo state not found");
-    console.log("Available states:", states.workflowStates.nodes.map((s: any) => s.name));
+    console.log("Available states:", states.workflowStates.nodes.map((s) => s.name));
     return;
   }
   
@@ -85,11 +108,12 @@ This is a frontend-only change. The backend already exposes retry data via the s
 1. Start orchestrator with a failing agent to trigger retries
 2. Verify retry entries appear in dashboard
 3. Verify they disappear when retry succeeds or max retries reached`,
-      projectId: project.project.id,
+      teamId: team.id,
+      projectId: project.id,
       stateId: todoState.id,
       labelIds: [],
     },
-  }) as any;
+  });
   
   if (result.issueCreate.success) {
     console.log("✅ Created issue:", result.issueCreate.issue.identifier);

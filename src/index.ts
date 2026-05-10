@@ -1,7 +1,10 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import { Command } from "commander";
 import { makeConfig } from "./orchestrator.js";
 import { Orchestrator } from "./orchestrator.js";
+import * as dotenv from "dotenv";
+
+dotenv.config();
 
 const program = new Command();
 
