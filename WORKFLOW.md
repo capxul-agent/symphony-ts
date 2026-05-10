@@ -1,11 +1,12 @@
 ---
 tracker:
   kind: linear
-  project_slug: symphony-0c79b11b75ea
+  project_slug: 8e254c24eebe
 states:
   active:
     - Todo
     - In Progress
+    - In Review
   terminal:
     - Done
     - Cancelled
@@ -36,6 +37,9 @@ You are an autonomous coding agent working on issue {{identifier}}: {{title}}.
 2. Create or modify files as needed
 3. Write tests if applicable
 4. Update the issue status when done
+
+## Available Tools
+- linear_graphql: Execute GraphQL queries against Linear to update issue status
 
 ## Workspace
 All work should be done in the current directory.

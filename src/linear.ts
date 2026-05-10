@@ -63,4 +63,13 @@ export class LinearClient {
       catch: (e) => new LinearError(`Failed to fetch issues: ${e}`),
     });
   }
+
+  rawQuery(query: string, variables?: Record<string, unknown>): Effect.Effect<unknown, LinearError> {
+    return Effect.tryPromise({
+      try: async () => {
+        return await this.client.request(query, variables || {});
+      },
+      catch: (e) => new LinearError(`GraphQL query failed: ${e}`),
+    });
+  }
 }

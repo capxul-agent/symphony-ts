@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { spawn } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
 import { mkdirSync, existsSync } from "fs";
 import type { JsonRpcMessage, AgentEvent, AppConfig } from "./domain.js";
 
@@ -9,9 +9,26 @@ export class AgentError {
 }
 
 export class AgentRunner {
+  private processes = new Map<string, ChildProcess>();
+  private tools: Array<{ name: string; description: string; inputSchema: unknown }> = [];
+
   constructor(private config: AppConfig) {}
 
-  run(workspace: string, prompt: string, issue: { identifier: string; title: string }): Effect.Effect<AgentEvent[], AgentError> {
+  setTools(tools: Array<{ name: string; description: string; inputSchema: unknown }>): void {
+    this.tools = tools;
+  }
+
+  kill(issueId: string): Effect.Effect<void, never, never> {
+    return Effect.sync(() => {
+      const proc = this.processes.get(issueId);
+      if (proc) {
+        proc.kill("SIGTERM");
+        this.processes.delete(issueId);
+      }
+    });
+  }
+
+  run(workspace: string, prompt: string, issue: { identifier: string; title: string; id: string }): Effect.Effect<AgentEvent[], AgentError> {
     return Effect.promise(async () => {
       // Ensure workspace exists
       if (!existsSync(workspace)) {
@@ -21,9 +38,11 @@ export class AgentRunner {
       const [cmd, ...args] = this.config.codexCommand.split(" ");
       const proc = spawn(cmd, args, {
         cwd: workspace,
-        env: process.env,
+        env: { ...process.env, SYMPHONY_TOOLS: JSON.stringify(this.tools) },
         stdio: ["pipe", "pipe", "pipe"],
       });
+
+      this.processes.set(issue.id, proc);
 
       let buffer = "";
       const pending = new Map<number | string, { resolve: (m: JsonRpcMessage) => void; reject: (e: Error) => void }>();
@@ -105,6 +124,7 @@ export class AgentRunner {
       } finally {
         proc.stdin?.end();
         proc.kill();
+        this.processes.delete(issue.id);
       }
     }).pipe(
       Effect.catchAll((e) => Effect.fail(new AgentError(`Agent run failed: ${e}`)))

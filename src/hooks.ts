@@ -8,7 +8,7 @@ export const HookConfigSchema = z.object({
   before_run: z.string().optional(),
   after_run: z.string().optional(),
   before_remove: z.string().optional(),
-  timeout_ms: z.number().int().min(1000).default(300_000),
+  timeout_ms: z.number().int().min(1000).optional().default(300_000),
 });
 
 export type HookConfig = z.infer<typeof HookConfigSchema>;
@@ -61,7 +61,7 @@ export function runHook(
   hookName: HookName,
   workspacePath: string,
   env?: Record<string, string>
-): Effect.Effect<void> {
+): Effect.Effect<void, never, never> {
   return Effect.gen(function* () {
     const result = yield* hooks.execute(hookName, workspacePath, env);
     if (result.exitCode !== 0) {
@@ -70,5 +70,5 @@ export function runHook(
         `Hook ${hookName} failed with exit code ${result.exitCode}: ${result.stderr}`
       );
     }
-  });
+  }).pipe(Effect.catchAll(() => Effect.void));
 }

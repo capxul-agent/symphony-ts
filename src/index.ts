@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
-import { Effect } from "effect";
 import { Command } from "commander";
-import { makeConfig } from "./domain.js";
+import { makeConfig } from "./orchestrator.js";
 import { Orchestrator } from "./orchestrator.js";
 
 const program = new Command();
@@ -19,19 +18,11 @@ program
     const config = makeConfig();
     const orchestrator = new Orchestrator(config, options.workflow);
     
-    const runtime = orchestrator.start().pipe(
-      Effect.catchAll((e) => Effect.sync(() => {
-        console.error("[symphony] Fatal error:", e);
-        process.exit(1);
-      }))
-    );
+    await orchestrator.start();
     
-    // Run in background
-    Effect.runFork(runtime);
-    
-    process.on("SIGINT", () => {
+    process.on("SIGINT", async () => {
       console.log("\n[symphony] Shutting down...");
-      Effect.runFork(orchestrator.stop());
+      await orchestrator.stop();
       setTimeout(() => process.exit(0), 1000);
     });
     
@@ -47,10 +38,9 @@ program
     const orchestrator = new Orchestrator(config, "./WORKFLOW.md");
     
     console.log("[test] Starting smoke test...");
-    const program = orchestrator.start();
-    await Effect.runPromise(program);
+    await orchestrator.start();
     
-    const state = await Effect.runPromise(orchestrator.getState());
+    const state = orchestrator.getState();
     console.log("[test] Final state:", Array.from(state.entries()));
     
     const fs = await import("fs");
@@ -64,7 +54,7 @@ program
     }
     
     // Stop after test
-    await Effect.runPromise(orchestrator.stop());
+    await orchestrator.stop();
   });
 
 program.parse();

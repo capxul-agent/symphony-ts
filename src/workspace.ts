@@ -31,7 +31,7 @@ export class WorkspaceManager {
     );
   }
 
-  cleanupWorkspace(issueIdentifier: string): Effect.Effect<void, WorkspaceError> {
+  cleanup(issueIdentifier: string): Effect.Effect<void, WorkspaceError> {
     return Effect.sync(() => {
       const path = this.getWorkspacePath(issueIdentifier);
       if (existsSync(path)) {

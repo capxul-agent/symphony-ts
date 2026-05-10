@@ -40,7 +40,7 @@ export interface LinearGraphqlTool {
 }
 
 export function createLinearGraphqlTool(
-  graphqlClient: (query: string, variables?: Record<string, unknown>) => Effect.Effect<unknown>
+  graphqlClient: (query: string, variables?: Record<string, unknown>) => Effect.Effect<unknown, any, never>
 ): LinearGraphqlTool {
   return {
     execute: (input) =>
