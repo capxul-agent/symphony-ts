@@ -1,0 +1,17 @@
+[Unit]
+Description=Symphony TypeScript Orchestrator
+After=network.target
+
+[Service]
+Type=simple
+User=abuusama
+WorkingDirectory=/home/abuusama/symphony-ts
+EnvironmentFile=/home/abuusama/symphony-ts/.env
+ExecStart=/usr/bin/node dist/index.js start
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
