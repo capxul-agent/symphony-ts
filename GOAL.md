@@ -1,247 +1,284 @@
-# Symphony TypeScript — Hermes Goal Handoff Prompt
+# GOAL — Phase 2: Complete Symphony Orchestrator
 
-## Mission
-
-Port the **Elixir reference implementation** of Symphony to **TypeScript/Bun** with **Effect** for async. Do not redesign. Do not simplify. Translate the proven architecture faithfully, module by module, preserving all behavior, edge cases, and safety invariants.
-
-## Why We Are Building This
-
-The Elixir implementation is hardcoded to Codex (OpenAI-only). We need Kimi CLI support. The SPEC is language-agnostic. The Elixir code is the source of truth for behavior. We port it to TypeScript so we can swap the agent backend.
-
-## Elixir → TypeScript Module Mapping
-
-| Elixir Module | TypeScript Module | Responsibility |
-|---------------|-------------------|----------------|
-| `SymphonyElixir` | `src/index.ts` | Application entry, supervisor startup |
-| `SymphonyElixir.Application` | `src/app.ts` | OTP-style supervisor (Effect layers) |
-| `SymphonyElixir.CLI` | `src/cli.ts` | Commander CLI, arg parsing, workflow path |
-| `SymphonyElixir.Config` | `src/config.ts` | Runtime config, `settings!/0`, `validate!/0` |
-| `SymphonyElixir.Config.Schema` | `src/config/schema.ts` | Ecto-style validation → Zod schemas |
-| `SymphonyElixir.Workflow` | `src/workflow.ts` | Load WORKFLOW.md, split front matter/prompt |
-| `SymphonyElixir.WorkflowStore` | `src/workflow/store.ts` | GenServer → Effect.Ref + polling loop |
-| `SymphonyElixir.Tracker` | `src/tracker.ts` | Adapter boundary (behaviour → interface) |
-| `SymphonyElixir.Linear.Adapter` | `src/linear/adapter.ts` | Linear tracker implementation |
-| `SymphonyElixir.Linear.Client` | `src/linear/client.ts` | GraphQL client, pagination, queries |
-| `SymphonyElixir.Linear.Issue` | `src/linear/issue.ts` | Issue struct + normalization |
-| `SymphonyElixir.Orchestrator` | `src/orchestrator.ts` | **Core**: GenServer → Effect fiber with state machine |
-| `SymphonyElixir.AgentRunner` | `src/agent.ts` | Workspace + prompt + app-server client |
-| `SymphonyElixir.Workspace` | `src/workspace.ts` | Per-issue dirs, hooks, safety |
-| `SymphonyElixir.PathSafety` | `src/path-safety.ts` | Canonicalization, root containment |
-| `SymphonyElixir.PromptBuilder` | `src/prompt-builder.ts` | Liquid/Solid template rendering |
-| `SymphonyElixir.Codex.AppServer` | `src/agent/app-server.ts` | JSON-RPC 2.0 over stdio |
-| `SymphonyElixir.Codex.DynamicTool` | `src/agent/dynamic-tool.ts` | `linear_graphql` tool handler |
-| `SymphonyElixir.HttpServer` | `src/http-server.ts` | Bun.serve() facade |
-| `SymphonyElixir.StatusDashboard` | `src/dashboard.ts` | Terminal/web status surface |
-| `SymphonyElixir.LogFile` | `src/logging.ts` | Structured logging with context |
-| `SymphonyElixir.SSH` | `src/ssh.ts` | Remote worker extension |
-| `SymphonyElixir.Tracker.Memory` | `src/tracker/memory.ts` | In-memory tracker for testing |
-
-## Key Design Patterns to Preserve
-
-### 1. Orchestrator State Machine (GenServer → Effect)
-
-Elixir uses GenServer with `handle_info` for ticks, worker exits, retry timers, codex updates. In TypeScript:
-
-```typescript
-// Use Effect.gen with Ref for mutable state
-// Use Effect.schedule for poll ticks
-// Use Effect.fork for worker processes
-// Use Queue for message passing (orchestrator ←→ workers)
-```
-
-**Must preserve:**
-- `State` struct: `poll_interval_ms`, `max_concurrent_agents`, `running`, `claimed`, `retry_attempts`, `completed`, `codex_totals`, `codex_rate_limits`
-- Tick sequence: reconcile → validate → fetch → dispatch
-- Worker exit handling: normal → continuation retry (1s), abnormal → exponential backoff
-- `{:DOWN, ref, :process, _pid, reason}` → find issue by ref, pop running entry, schedule retry
-- `{:codex_worker_update, issue_id, update}` → integrate token deltas, rate limits
-- `{:retry_issue, issue_id, token}` → pop retry, fetch candidates, re-dispatch or release
-
-### 2. Config Layer (Ecto → Zod)
-
-Elixir uses Ecto embedded schemas with changesets. In TypeScript:
-
-```typescript
-// Use Zod for schema validation
-// Preserve all defaults exactly
-// Preserve $VAR resolution, path expansion, secret normalization
-// Preserve per-state concurrency limits normalization
-```
-
-**Schema structure (must match exactly):**
-- `Tracker`: kind, endpoint, api_key, project_slug, assignee, active_states, terminal_states
-- `Polling`: interval_ms (default 30000)
-- `Workspace`: root (default `<tmp>/symphony_workspaces`)
-- `Worker`: ssh_hosts, max_concurrent_agents_per_host
-- `Agent`: max_concurrent_agents (10), max_turns (20), max_retry_backoff_ms (300000), max_concurrent_agents_by_state
-- `Codex`: command (`codex app-server`), approval_policy, thread_sandbox, turn_sandbox_policy, turn_timeout_ms (3600000), read_timeout_ms (5000), stall_timeout_ms (300000)
-- `Hooks`: after_create, before_run, after_run, before_remove, timeout_ms (60000)
-- `Observability`: dashboard_enabled (true), refresh_ms (1000), render_interval_ms (16)
-- `Server`: port, host (`127.0.0.1`)
-
-### 3. Workflow Store (GenServer → Effect Fiber)
-
-Elixir polls file mtime/size/hash every 1s. In TypeScript:
-
-```typescript
-// Effect.schedule(Schedule.spaced(1000)) to poll file stat
-// Keep last known good workflow in Ref
-// On change: reload, validate, update Ref
-// On failure: log error, keep last known good
-```
-
-### 4. Workspace Manager
-
-**Must preserve:**
-- `create_for_issue/2` → returns `{ok, path} | {error, reason}`
-- Sanitize identifier: `[A-Za-z0-9._-]` only, rest → `_`
-- `ensure_workspace` → create if missing, reuse if exists, replace if file
-- `validate_workspace_path` → must be under workspace root
-- Hook execution: `bash -lc <script>` with cwd=workspace, timeout=hooks.timeout_ms
-- Hook semantics: after_create (fatal), before_run (fatal), after_run (logged, ignored), before_remove (logged, ignored)
-- SSH remote execution support (optional but preserve structure)
-
-### 5. Agent Runner
-
-**Must preserve:**
-- `run/3` → starts worker, handles normal/abnormal exit
-- `run_on_worker_host/4` → workspace → hooks → codex turns
-- `run_codex_turns/5` → start session → loop turns → stop session
-- `do_run_codex_turns/7` → build prompt → run turn → check issue state → continue or break
-- Max turns enforcement
-- Issue state refresh between turns
-- Session reuse across continuation turns
-
-### 6. App-Server Client (Codex JSON-RPC)
-
-**Must preserve:**
-- `start_session/2` → spawn port, initialize, get thread_id
-- `run_turn/4` → send turn/start, stream updates, wait completion
-- `stop_session/1` → terminate port
-- Message IDs: initialize=1, thread_start=2, turn_start=3
-- Read timeout: 5000ms for sync requests
-- Turn timeout: 3600000ms
-- Dynamic tool handling: `linear_graphql` only
-- Auto-approve policy for non-interactive sessions
-- Token accounting from protocol events
-
-### 7. Linear Client
-
-**Must preserve:**
-- `fetch_candidate_issues/0` → paginated query with project slug + active states
-- `fetch_issues_by_states/1` → for startup terminal cleanup
-- `fetch_issue_states_by_ids/1` → for reconciliation
-- `graphql/3` → raw GraphQL with auth header
-- Issue normalization: labels lowercase, blockers from inverseRelations type=blocks, priority integer only
-- Page size: 50
-- Network timeout: 30000ms
-
-### 8. HTTP Server Extension
-
-**Must preserve:**
-- `Bun.serve()` instead of Phoenix
-- Dashboard at `/` (server-rendered HTML or client-side)
-- JSON API:
-  - `GET /api/v1/state` → running, retrying, codex_totals, rate_limits
-  - `GET /api/v1/:issue_identifier` → issue-specific details
-  - `POST /api/v1/refresh` → trigger poll cycle
-- PubSub for live updates (or polling from dashboard)
-
-## Critical Safety Invariants (Must Not Break)
-
-1. **Workspace containment**: `workspace_path` MUST have `workspace_root` as prefix
-2. **Agent cwd**: subprocess cwd MUST be workspace_path
-3. **Identifier sanitization**: only `[A-Za-z0-9._-]` in directory names
-4. **Hook timeout**: all hooks MUST have timeout to prevent hangs
-5. **Token accounting**: track deltas, not cumulative, avoid double-counting
-6. **Retry idempotency**: claimed + running checks before ANY dispatch
-7. **Stall detection**: kill worker if no events for `stall_timeout_ms`
-
-## Kimi CLI Bridge Integration
-
-The Elixir code spawns `codex app-server` via Port. We replace this with our Python bridge:
-
-```typescript
-// codex.command = "python3 /opt/symphony/kimi_cli_bridge.py"
-// The bridge speaks the same JSON-RPC 2.0 protocol
-// AgentRunner calls AppServer.start_session() → spawns bridge instead of codex
-// All other code remains identical
-```
-
-**Bridge location**: `/opt/symphony/kimi_cli_bridge.py`
-**Bridge protocol**: JSON-RPC 2.0 over stdio (same as Codex app-server)
-
-## Testing Strategy
-
-1. **Unit tests** for each module (mirror Elixir test structure)
-2. **Integration tests** with `Tracker.Memory` (in-memory tracker)
-3. **Real integration profile** with Linear + Kimi CLI
-4. **Smoke test**: Create issue → poll → dispatch → execute → verify workspace
-
-## Files to Create
-
-```
-src/
-  index.ts              # Application entry
-  app.ts                # Supervisor/layer composition
-  cli.ts                # Commander CLI
-  config.ts             # Config access
-  config/
-    schema.ts           # Zod schemas (mirror Ecto)
-  workflow.ts           # Workflow loader
-  workflow/
-    store.ts            # File watcher + cache
-  tracker.ts            # Adapter interface
-  tracker/
-    memory.ts           # In-memory adapter for tests
-  linear/
-    adapter.ts          # Linear tracker adapter
-    client.ts           # GraphQL client
-    issue.ts            # Issue struct + normalization
-  orchestrator.ts       # Core state machine
-  agent.ts              # Agent runner
-  agent/
-    app-server.ts       # JSON-RPC client
-    dynamic-tool.ts     # linear_graphql handler
-  workspace.ts          # Workspace manager
-  path-safety.ts        # Path canonicalization
-  prompt-builder.ts     # Template rendering
-  http-server.ts        # Bun.serve() facade
-  dashboard.ts          # Status surface
-  logging.ts            # Structured logging
-  ssh.ts                # Remote worker extension
-```
-
-## Acceptance Criteria
-
-- [ ] All Elixir modules have TypeScript equivalents
-- [ ] All SPEC Section 18.1 requirements implemented
-- [ ] Orchestrator state machine matches Elixir behavior exactly
-- [ ] Config validation matches Ecto changeset semantics
-- [ ] Workspace safety invariants enforced
-- [ ] Hooks execute with correct failure semantics
-- [ ] Retry queue with exponential backoff works
-- [ ] Reconciliation stops runs on terminal states
-- [ ] Token accounting tracks usage correctly
-- [ ] HTTP server serves dashboard + JSON API
-- [ ] Smoke test passes end-to-end with Kimi CLI
-- [ ] Real integration test passes with Linear
+> **Context:** This is a handoff prompt for `hermes goal`. You are continuing the port of OpenAI's Elixir Symphony orchestrator to TypeScript/Bun. Phase 1 (core loop + E2E smoke test) is DONE and passing. Your job is to implement the remaining modules to achieve full SPEC conformance.
 
 ## Current State
 
-- Repo: https://github.com/capxul-agent/symphony-ts
-- Basic modules exist but are incomplete
-- Orchestrator lacks retry, reconciliation, hooks
-- No HTTP server, no dashboard, no token accounting
-- Smoke test passes basic poll → dispatch → execute
+**Repo:** https://github.com/capxul-agent/symphony-ts  
+**Branch:** main  
+**Phase 1 Status:** ✅ COMPLETE — 4 E2E tests passing
 
-## Next Action
+### What Already Works (DO NOT TOUCH)
 
-Implement modules in dependency order:
-1. `config/schema.ts` (Zod schemas)
-2. `workflow/store.ts` (file watcher)
-3. `orchestrator.ts` (full state machine)
-4. `workspace.ts` (hooks + safety)
-5. `agent/app-server.ts` (bridge integration)
-6. `http-server.ts` + `dashboard.ts`
-7. Tests for each module
+| Module | File | Status |
+|--------|------|--------|
+| Domain types | `src/domain.ts` | ✅ |
+| Config schema | `src/config/schema.ts` | ✅ Zod validation |
+| Workflow store | `src/workflow/store.ts` | ✅ File polling with Effect |
+| Linear client | `src/linear.ts` | ✅ GraphQL, finds issues |
+| Workspace manager | `src/workspace.ts` | ✅ Dir creation, git init |
+| Kimi CLI bridge | `src/agent.ts` | ✅ JSON-RPC over stdio |
+| Orchestrator loop | `src/orchestrator.ts` | ✅ Polls, dispatches, tracks |
+| E2E test suite | `src/tests/e2e.test.ts` | ✅ 4/4 passing |
+
+### Test Command (verify before you start)
+
+```bash
+cd ~/symphony-ts
+bun test src/tests/e2e.test.ts --timeout 120000
+# Expected: 4 pass, 0 fail
+```
+
+---
+
+## What You Must Implement (Phase 2)
+
+### 1. Retry Queue + Exponential Backoff (`src/scheduler/retry_queue.ts`)
+
+**Elixir source:** `lib/symphony_elixir/scheduler.ex` (retry logic)  
+**Pattern:** When an agent run fails (non-zero exit, crash, timeout), push to retry queue with exponential backoff (1s, 2s, 4s, 8s, max 60s). Max 5 retries, then mark issue as failed.
+
+**Acceptance criteria:**
+- [ ] `RetryQueue` module with `add(issueId, attemptCount)`, `next()`, `remove(issueId)`
+- [ ] Backoff delays: `min(2^attempt * 1000, 60000)` ms
+- [ ] After 5 failures, transition issue to terminal state (see #2)
+- [ ] Test: `src/tests/retry_queue.test.ts` — simulate 5 failures, verify backoff timing, verify terminal transition
+
+### 2. Reconciliation (`src/scheduler/reconciler.ts`)
+
+**Elixir source:** `lib/symphony_elixir/tracker.ex` (state tracking)  
+**Pattern:** On every poll, reconcile Linear state with local run state. If Linear issue is in a terminal state (Done, Canceled, Closed), stop any active run and clean up workspace.
+
+**Acceptance criteria:**
+- [ ] `Reconciler` module with `reconcile(linearIssues, activeRuns)`
+- [ ] Detect terminal states from `WORKFLOW.md` state mapping
+- [ ] For terminal issues: kill agent process, schedule workspace cleanup
+- [ ] For deleted issues: same cleanup path
+- [ ] Test: `src/tests/reconciler.test.ts` — mock Linear state changes, verify process kill + cleanup
+
+### 3. Hooks System (`src/hooks.ts`)
+
+**Elixir source:** `lib/symphony_elixir/hooks.ex`  
+**Pattern:** Four hook points: `after_create`, `before_run`, `after_run`, `before_remove`. Each hook is a shell command executed in the workspace directory. Hooks can fail without breaking the main flow (log warning, continue).
+
+**Acceptance criteria:**
+- [ ] `Hooks` module with `execute(hookName, workspacePath, env)`
+- [ ] Read hooks from `WORKFLOW.md` `hooks:` section
+- [ ] Execute via `Bun.$` or `child_process.spawn`
+- [ ] Non-zero exit = warning log, continue orchestration
+- [ ] Test: `src/tests/hooks.test.ts` — mock WORKFLOW.md with hooks, verify execution + failure handling
+
+### 4. Token Accounting (`src/tracker/token_accountant.ts`)
+
+**Elixir source:** `lib/symphony_elixir/tracker.ex` (token tracking)  
+**Pattern:** Parse Kimi CLI output for token usage lines (`TurnEnd(total_tokens=..., input_tokens=..., output_tokens=...)`). Accumulate per-issue, per-run, per-project. Write to `.symphony/tokens.jsonl`.
+
+**Acceptance criteria:**
+- [ ] `TokenAccountant` module with `record(issueId, runId, tokens)`
+- [ ] Parse Kimi CLI `TurnEnd()` metadata for token counts
+- [ ] Accumulate: per-run total, per-issue total, per-project total
+- [ ] Append to `.symphony/tokens.jsonl` (JSON Lines format)
+- [ ] Test: `src/tests/token_accountant.test.ts` — mock Kimi output, verify parsing + accumulation
+
+### 5. HTTP Server + Dashboard + JSON API (`src/server.ts`)
+
+**Elixir source:** `lib/symphony_web/` (Phoenix controllers, LiveView)  
+**Pattern:** Bun.serve() on port from `SYMPHONY_PORT` env (default 8793). Three endpoints:
+
+- `GET /` — HTML dashboard (static file from `public/index.html`)
+- `GET /api/v1/state` — JSON: `{issues: [...], activeRuns: [...], stats: {...}}`
+- `GET /api/v1/issues/:id` — JSON: single issue with run history
+- `POST /api/v1/refresh` — Trigger immediate Linear poll
+
+**Acceptance criteria:**
+- [ ] `Server` module with `start(port)`, `stop()`
+- [ ] Dashboard shows: active runs, queued issues, completed count, token usage
+- [ ] API returns real data from orchestrator state (not mock)
+- [ ] `POST /api/v1/refresh` triggers `orchestrator.pollNow()`
+- [ ] Test: `src/tests/server.test.ts` — start server, hit all endpoints, verify JSON shape
+
+### 6. `linear_graphql` Tool for Agents (`src/agent/tools/linear_graphql.ts`)
+
+**Elixir source:** `lib/symphony_elixir/codex/dynamic_tool.ex`  
+**Pattern:** Agent needs to call Linear GraphQL API. Provide a tool that the Kimi CLI bridge exposes: `linear_graphql(query, variables?)`. Bridge forwards to `src/linear.ts` client.
+
+**Acceptance criteria:**
+- [ ] Tool definition in bridge: `linear_graphql` with JSON schema
+- [ ] Bridge handles `tool_call` JSON-RPC method, routes to Linear client
+- [ ] Return GraphQL response as JSON string to agent
+- [ ] Test: `src/tests/linear_tool.test.ts` — mock GraphQL query, verify tool execution + response
+
+### 7. Prompt Builder with Liquid Templates (`src/prompt_builder.ts`)
+
+**Elixir source:** `lib/symphony_elixir/codex/prompt_builder.ex`  
+**Pattern:** Read `.symphony/prompt.md` from workspace. If it contains Liquid tags (`{{issue.title}}`, `{{issue.description}}`, `{{workflow.tools}}`), render with issue + workflow context. Fallback to raw prompt if no tags.
+
+**Acceptance criteria:**
+- [ ] `PromptBuilder` module with `build(issue, workflow)`
+- [ ] Parse `prompt.md` for Liquid-style `{{var}}` tags
+- [ ] Substitute: `issue.title`, `issue.description`, `issue.identifier`, `workflow.tools` (JSON array), `workflow.states` (JSON object)
+- [ ] If no tags found, return raw prompt unchanged
+- [ ] Test: `src/tests/prompt_builder.test.ts` — mock prompt.md with/without tags, verify substitution
+
+---
+
+## Implementation Order (Dependency Ranked)
+
+1. **Retry Queue** — standalone, no deps
+2. **Reconciler** — depends on retry queue (terminal state triggers cleanup)
+3. **Hooks** — standalone, integrates into orchestrator
+4. **Token Accountant** — standalone, integrates into agent bridge
+5. **Prompt Builder** — standalone, integrates into agent
+6. **Linear GraphQL Tool** — depends on Linear client (already exists)
+7. **HTTP Server** — depends on orchestrator state
+
+**Recommended:** Implement in order, test each before moving to next.
+
+---
+
+## Definition of Done (Phase 2 Complete)
+
+### Mandatory Tests (all must pass)
+
+```bash
+# 1. Existing tests still pass
+bun test src/tests/e2e.test.ts --timeout 120000
+# Expected: 4 pass, 0 fail
+
+# 2. New module tests
+bun test src/tests/retry_queue.test.ts
+bun test src/tests/reconciler.test.ts
+bun test src/tests/hooks.test.ts
+bun test src/tests/token_accountant.test.ts
+bun test src/tests/server.test.ts
+bun test src/tests/linear_tool.test.ts
+bun test src/tests/prompt_builder.test.ts
+
+# 3. Full suite
+bun test
+# Expected: 11+ pass, 0 fail
+```
+
+### End-to-End Ticket Flow (THE REAL TEST)
+
+Create a Linear ticket and watch it go through ALL stages:
+
+```bash
+# Terminal 1: Start the orchestrator + server
+bun run src/index.ts start --port 8793
+
+# Terminal 2: Create a test issue in Linear
+# (Use Linear UI or API — create issue in Capxul project with title "E2E Phase 2 Test")
+
+# Terminal 3: Watch the flow
+curl http://localhost:8793/api/v1/state
+# Should show: issue in "Todo" state, queued
+
+# Wait for orchestrator to pick it up (poll interval 30s, or hit refresh)
+curl -X POST http://localhost:8793/api/v1/refresh
+
+# Check state again — should show "In Progress" with activeRun
+curl http://localhost:8793/api/v1/state
+
+# Check workspace — should have files created by Kimi agent
+ls workspaces/CAP-XX/.symphony/
+
+# Check Linear — issue should move to "In Review" (agent did this via linear_graphql tool)
+
+# Approve in Linear (move to "Done")
+# Reconciler should detect terminal state, stop run, clean up
+
+# Final check
+curl http://localhost:8793/api/v1/issues/CAP-XX
+# Should show: completed, token usage, run history, no activeRun
+```
+
+**Success criteria for E2E ticket flow:**
+- [ ] Ticket created in Linear
+- [ ] Orchestrator detects it within 1 poll cycle
+- [ ] Workspace created with `after_create` hook executed
+- [ ] Agent runs (`before_run` hook → Kimi CLI → `after_run` hook)
+- [ ] Agent uses `linear_graphql` tool to move ticket to "In Review"
+- [ ] Token usage recorded in `.symphony/tokens.jsonl`
+- [ ] Dashboard shows real-time state at `/`
+- [ ] JSON API returns accurate data
+- [ ] Manual Linear state change to "Done" triggers reconciler cleanup
+- [ ] `before_remove` hook executes, workspace archived
+
+---
+
+## Safety Invariants (DO NOT BREAK)
+
+1. **Never redesign.** Translate Elixir patterns to TypeScript. If Elixir uses GenServer, use Effect. If Elixir uses Ecto changesets, use Zod.
+2. **Bridge protocol is sacred.** JSON-RPC 2.0 over stdio. Methods: `initialize`, `thread/start`, `turn/start`, `tool_result`. No deviation.
+3. **Kimi CLI only.** Do NOT use `api.kimi.com` — it returns 403 for non-agent clients. Always spawn `kimi --afk --print -p`.
+4. **Effect for all async.** No raw Promises for orchestration logic. Use `Effect.gen`, `Effect.map`, `Effect.flatMap`, `Effect.catchAll`.
+5. **Zod for all validation.** No runtime type assertions. Every external input parsed through Zod schema.
+6. **Structured logging only.** Winston with JSON format. No `console.log` in production code.
+7. **Tests before merge.** Every module has a `*.test.ts`. E2E test must pass before git push.
+
+---
+
+## Files to Reference
+
+| File | Purpose |
+|------|---------|
+| `/opt/symphony/SPEC.md` | Original OpenAI specification (2169 lines) |
+| `/opt/symphony/elixir/lib/symphony_elixir/` | Elixir reference implementation — THE SPEC |
+| `src/domain.ts` | Domain types — DO NOT CHANGE without updating all consumers |
+| `src/config/schema.ts` | Zod schemas — extend for new config fields |
+| `src/linear.ts` | Linear client — use for `linear_graphql` tool |
+| `src/agent.ts` | Kimi bridge — extend for tool handling |
+| `src/orchestrator.ts` | Main loop — integrate retry queue, reconciler, hooks |
+| `src/tests/e2e.test.ts` | Existing E2E — must still pass |
+
+---
+
+## Bridge Integration Points
+
+**Where Kimi CLI plugs in:**
+
+```
+orchestrator.ts → agent.ts (spawn bridge)
+                      ↓
+               kimi_cli_bridge.py (JSON-RPC over stdio)
+                      ↓
+               kimi --afk --print -p (actual CLI)
+                      ↓
+               TextPart extraction (clean output)
+                      ↓
+               Return to orchestrator
+```
+
+**Tool call flow (NEW for Phase 2):**
+
+```
+Kimi CLI → outputs tool_call JSON
+              ↓
+       bridge parses tool_call
+              ↓
+       routes to linear_graphql handler
+              ↓
+       calls src/linear.ts client
+              ↓
+       returns result via tool_result JSON-RPC
+              ↓
+       bridge sends back to Kimi CLI
+```
+
+---
+
+## Acceptance Criteria Summary
+
+| # | Feature | Test File | E2E Verified |
+|---|---------|-----------|------------|
+| 1 | Retry queue | `retry_queue.test.ts` | ❌ |
+| 2 | Reconciler | `reconciler.test.ts` | ❌ |
+| 3 | Hooks | `hooks.test.ts` | ❌ |
+| 4 | Token accounting | `token_accountant.test.ts` | ❌ |
+| 5 | HTTP server + dashboard | `server.test.ts` | ❌ |
+| 6 | linear_graphql tool | `linear_tool.test.ts` | ❌ |
+| 7 | Prompt builder | `prompt_builder.test.ts` | ❌ |
+| **All** | **Full ticket flow** | **Manual E2E** | **❌** |
+
+**Phase 2 is DONE when:** All 7 module tests pass + full ticket E2E flow completes successfully + `bun test` shows 0 failures.
