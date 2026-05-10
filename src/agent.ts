@@ -77,7 +77,7 @@ export class AgentRunner {
           sandbox: "none",
           cwd: workspace,
         });
-        const threadId = (threadResp.result as any)?.thread?.id;
+        const threadId = ((threadResp as any).result as any)?.thread?.id;
         if (!threadId) {
           throw new Error("No thread ID returned");
         }
@@ -89,7 +89,7 @@ export class AgentRunner {
           cwd: workspace,
           title: `${issue.identifier}: ${issue.title}`,
         });
-        const turnId = (turnResp.result as any)?.turn?.id;
+        const turnId = ((turnResp as any).result as any)?.turn?.id;
 
         // Wait for Kimi to finish processing
         await new Promise(r => setTimeout(r, 60000));

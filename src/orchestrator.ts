@@ -1,9 +1,9 @@
-import { Effect, Ref, Fiber } from "effect";
+import { Effect, Ref } from "effect";
 import type { AppConfig, Issue, WorkerState, AgentEvent } from "./domain.js";
-import { LinearClient, LinearError } from "./linear.js";
-import { WorkspaceManager, WorkspaceError } from "./workspace.js";
-import { AgentRunner, AgentError } from "./agent.js";
-import { loadWorkflow, WorkflowError } from "./workflow.js";
+import { LinearClient } from "./linear.js";
+import { WorkspaceManager } from "./workspace.js";
+import { AgentRunner } from "./agent.js";
+import { loadWorkflow } from "./workflow.js";
 
 export class OrchestratorError {
   readonly _tag = "OrchestratorError";
@@ -27,18 +27,18 @@ export class Orchestrator {
     this.state = Ref.unsafeMake(new Map());
   }
 
-  start(): Effect.Effect<void, OrchestratorError> {
+  start(): Effect.Effect<void, OrchestratorError, never> {
     return Effect.gen(this, function* () {
       console.log("[symphony] Starting orchestrator...");
       
       const workflow = yield* loadWorkflow(this.workflowPath).pipe(
-        Effect.catchAll((e) => Effect.fail(new OrchestratorError(`Failed to load workflow: ${e.message}`)))
+        Effect.catchAll((e: unknown) => Effect.fail(new OrchestratorError(`Failed to load workflow: ${e}`)))
       );
       
       console.log(`[symphony] Loaded workflow for project: ${workflow.config.tracker.projectSlug}`);
       console.log(`[symphony] Active states: ${workflow.config.states.active.join(", ")}`);
       
-      // Do initial tick - SYNCHRONOUSLY wait for completion
+      // Do initial tick
       yield* this.tick(workflow);
       
       // Schedule recurring ticks
@@ -50,7 +50,7 @@ export class Orchestrator {
     });
   }
 
-  stop(): Effect.Effect<void, never> {
+  stop(): Effect.Effect<void, never, never> {
     return Effect.sync(() => {
       if (this.timer) {
         clearInterval(this.timer);
@@ -60,14 +60,14 @@ export class Orchestrator {
     });
   }
 
-  private tick(workflow: { config: { states: { active: string[] } }; promptTemplate: string }): Effect.Effect<void, never> {
+  private tick(workflow: { config: { states: { active: string[] } }; promptTemplate: string }): Effect.Effect<void, never, never> {
     return Effect.gen(this, function* () {
       const issues = yield* this.tracker.fetchCandidateIssues(
         this.config.linearProjectSlug,
         workflow.config.states.active
       ).pipe(
-        Effect.catchAll((e) => {
-          console.error("[symphony] Failed to fetch issues:", e.message);
+        Effect.catchAll((e: unknown) => {
+          console.error("[symphony] Failed to fetch issues:", e);
           return Effect.succeed([] as Issue[]);
         })
       );
@@ -83,8 +83,8 @@ export class Orchestrator {
 
         // Create workspace
         const workspace = yield* this.workspaces.ensureWorkspace(issue.identifier).pipe(
-          Effect.catchAll((e) => {
-            console.error(`[symphony] Workspace error for ${issue.identifier}:`, e.message);
+          Effect.catchAll((e: unknown) => {
+            console.error(`[symphony] Workspace error for ${issue.identifier}:`, e);
             return Effect.succeed("");
           })
         );
@@ -107,10 +107,10 @@ export class Orchestrator {
         // Build prompt
         const prompt = this.buildPrompt(issue, workflow);
         
-        // Run agent DIRECTLY (not in a fork) so we wait for completion
+        // Run agent
         const events = yield* this.agent.run(workspace, prompt, issue).pipe(
           Effect.timeout(this.config.turnTimeoutMs),
-          Effect.catchAll((e) => {
+          Effect.catchAll((e: unknown) => {
             console.error(`[symphony] Agent failed for ${issue.identifier}:`, e);
             return Effect.succeed([] as AgentEvent[]);
           })
@@ -139,7 +139,7 @@ export class Orchestrator {
       .replace(/\{\{state\}\}/g, issue.state);
   }
 
-  getState(): Effect.Effect<Map<string, WorkerState>, never> {
+  getState(): Effect.Effect<Map<string, WorkerState>, never, never> {
     return Ref.get(this.state);
   }
 }

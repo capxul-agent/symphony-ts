@@ -25,8 +25,8 @@ export interface WorkflowConfig {
     readonly projectSlug: string;
   };
   readonly states: {
-    readonly active: ReadonlyArray<string>;
-    readonly terminal: ReadonlyArray<string>;
+    readonly active: string[];
+    readonly terminal: string[];
   };
   readonly codex: {
     readonly command: string;
@@ -113,13 +113,16 @@ export interface AppConfig {
   readonly dashboardPort: number;
 }
 
-export const makeConfig = (): AppConfig => ({
-  linearApiKey: process.env.LINEAR_API_KEY || "",
-  linearProjectSlug: process.env.LINEAR_PROJECT_SLUG || "symphony",
-  workspaceRoot: process.env.WORKSPACE_ROOT || "/opt/symphony-ts/workspaces",
-  codexCommand: process.env.CODEX_COMMAND || "python3 /opt/symphony/kimi_cli_bridge.py",
-  pollIntervalMs: Number(process.env.POLL_INTERVAL_MS) || 30000,
-  maxConcurrentWorkers: Number(process.env.MAX_CONCURRENT_WORKERS) || 3,
-  turnTimeoutMs: Number(process.env.TURN_TIMEOUT_MS) || 300000,
-  dashboardPort: Number(process.env.DASHBOARD_PORT) || 8793,
-});
+export function makeConfig(overrides?: Partial<AppConfig>): AppConfig {
+  return {
+    linearApiKey: process.env.LINEAR_API_KEY || "",
+    linearProjectSlug: process.env.LINEAR_PROJECT_SLUG || "symphony",
+    workspaceRoot: process.env.WORKSPACE_ROOT || "/opt/symphony-ts/workspaces",
+    codexCommand: process.env.CODEX_COMMAND || "python3 /opt/symphony/kimi_cli_bridge.py",
+    pollIntervalMs: Number(process.env.POLL_INTERVAL_MS) || 30000,
+    maxConcurrentWorkers: Number(process.env.MAX_CONCURRENT_WORKERS) || 3,
+    turnTimeoutMs: Number(process.env.TURN_TIMEOUT_MS) || 300000,
+    dashboardPort: Number(process.env.DASHBOARD_PORT) || 8793,
+    ...overrides,
+  };
+}
